@@ -11,7 +11,7 @@ module.exports = {
         NODE_ENV: 'production',
         HOST: '0.0.0.0',
         PORT: 4000,
-        MONGODB_URI: 'mongodb://localhost:27017/carwazplan_crm',
+        MONGODB_URI: process.env.MONGODB_URI || 'mongodb://localhost:27017/carwazplan_crm',
         JWT_SECRET: 'changez-moi-en-production-avec-une-cle-secrete-longue-et-complexe',
       },
       error_file: './logs/pm2-error.log',

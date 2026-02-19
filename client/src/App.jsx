@@ -4,6 +4,8 @@ import { exportToCSV, exportToPDF } from './exportUtils'
 import { useToast } from './contexts/ToastContext'
 import { useConfirm } from './contexts/ConfirmContext'
 import { useDebounce } from './hooks/useDebounce'
+import { DashboardChart } from './components/DashboardChart'
+import { DashboardCalendar } from './components/DashboardCalendar'
 
 // En dev sur localhost : utiliser directement le backend pour éviter les problèmes de proxy (ex: PDF)
 const API_BASE = import.meta.env.VITE_API_URL ?? (typeof window !== 'undefined' && window.location?.hostname === 'localhost' ? 'http://localhost:4000' : '')
@@ -32,8 +34,10 @@ function App() {
     return stored
   })
   const [authError, setAuthError] = useState('')
-  const [authEmail, setAuthEmail] = useState('')
+  const [authEmail, setAuthEmail] = useState(() => localStorage.getItem('remember_email') || '')
   const [authPassword, setAuthPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [rememberMe, setRememberMe] = useState(() => !!localStorage.getItem('remember_email'))
   const [isRegisterMode, setIsRegisterMode] = useState(false)
   const [registerData, setRegisterData] = useState({
     email: '',
@@ -43,6 +47,7 @@ function App() {
   })
   const [registerSuccess, setRegisterSuccess] = useState('')
   const [stats, setStats] = useState(null)
+  const [chartData, setChartData] = useState([])
   const [devis, setDevis] = useState([])
   const [devisAll, setDevisAll] = useState([])
   const [prospects, setProspects] = useState([])
@@ -244,6 +249,7 @@ function App() {
 
         const [
           statsRes,
+          chartRes,
           meRes,
           devisRes,
           prospectsRes,
@@ -256,6 +262,7 @@ function App() {
           usersRes,
         ] = await Promise.all([
           fetch(`${API_BASE}/api/dashboard/stats`, { headers }),
+          fetch(`${API_BASE}/api/dashboard/chart?days=30`, { headers }),
           fetch(`${API_BASE}/api/auth/me`, { headers }),
           fetch(`${API_BASE}/api/devis`, { headers }),
           fetch(`${API_BASE}/api/prospects`, { headers }),
@@ -311,6 +318,7 @@ function App() {
         }
 
         const statsJson = await statsRes.json()
+        const chartJson = chartRes.ok ? await chartRes.json() : []
         const meJson = meRes.ok ? await meRes.json() : null
         const devisJson = await devisRes.json()
         const prospectsJson = await prospectsRes.json()
@@ -323,6 +331,7 @@ function App() {
         const usersJson = usersRes?.ok ? await usersRes.json() : []
 
         setStats(statsJson)
+        setChartData(chartJson)
         setCurrentUser(meJson)
         setDevis(devisJson)
         setProspects(prospectsJson)
@@ -1522,6 +1531,11 @@ function App() {
       return
     }
     try {
+      if (rememberMe) {
+        localStorage.setItem('remember_email', authEmail)
+      } else {
+        localStorage.removeItem('remember_email')
+      }
       const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1589,116 +1603,134 @@ function App() {
 
   if (!token) {
     return (
-      <div className="login-root">
-        <div className="login-card">
-          <h1>
-            {isRegisterMode ? 'Inscription CRM CarWazPlan' : 'Connexion CRM CarWazPlan'}
-          </h1>
-          {isRegisterMode ? (
-            <form onSubmit={handleRegister} className="login-form">
-              <input
-                type="email"
-                placeholder="Email"
-                value={registerData.email}
-                onChange={(e) =>
-                  setRegisterData((prev) => ({ ...prev, email: e.target.value }))
-                }
-                required
-              />
-              <input
-                type="password"
-                placeholder="Mot de passe"
-                value={registerData.password}
-                onChange={(e) =>
-                  setRegisterData((prev) => ({ ...prev, password: e.target.value }))
-                }
-                required
-              />
-              <input
-                type="password"
-                placeholder="Confirmer le mot de passe"
-                value={registerData.confirmPassword}
-                onChange={(e) =>
-                  setRegisterData((prev) => ({
-                    ...prev,
-                    confirmPassword: e.target.value,
-                  }))
-                }
-                required
-              />
-              <select
-                value={registerData.role}
-                onChange={(e) =>
-                  setRegisterData((prev) => ({ ...prev, role: e.target.value }))
-                }
-                className="role-select"
-              >
-                <option value="user">Utilisateur</option>
-                <option value="admin">Administrateur</option>
-              </select>
-              {authError && <p className="login-error">{authError}</p>}
-              {registerSuccess && <p className="login-success">{registerSuccess}</p>}
-              <button type="submit">S&apos;inscrire</button>
-              <div className="login-divider">ou</div>
-              <a
-                href={`${API_BASE}/api/auth/google`}
-                className="btn-google"
-              >
-                <span className="btn-google-icon">G</span>
-                S&apos;inscrire avec Google
-              </a>
-              <button
-                type="button"
-                className="toggle-auth-btn"
-                onClick={() => {
-                  setIsRegisterMode(false)
-                  setAuthError('')
-                  setRegisterSuccess('')
-                }}
-              >
-                Déjà un compte ? Se connecter
-              </button>
-            </form>
-          ) : (
-            <form onSubmit={handleLogin} className="login-form">
-              <input
-                type="email"
-                placeholder="Email"
-                value={authEmail}
-                onChange={(e) => setAuthEmail(e.target.value)}
-                required
-              />
-              <input
-                type="password"
-                placeholder="Mot de passe"
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-                required
-              />
-              {authError && <p className="login-error">{authError}</p>}
-              {registerSuccess && <p className="login-success">{registerSuccess}</p>}
-              <button type="submit">Se connecter</button>
-              <div className="login-divider">ou</div>
-              <a
-                href={`${API_BASE}/api/auth/google`}
-                className="btn-google"
-              >
-                <span className="btn-google-icon">G</span>
-                Se connecter avec Google
-              </a>
-              <button
-                type="button"
-                className="toggle-auth-btn"
-                onClick={() => {
-                  setIsRegisterMode(true)
-                  setAuthError('')
-                  setRegisterSuccess('')
-                }}
-              >
-                Pas encore de compte ? S&apos;inscrire
-              </button>
-            </form>
-          )}
+      <div className="auth-root">
+        <div className="auth-container">
+          <div className="auth-welcome">
+            <div className="auth-welcome-shapes" />
+            <div className="auth-welcome-content">
+              <h2>BIENVENUE</h2>
+              <p className="auth-welcome-title">CRM CarWazPlan</p>
+              <p className="auth-welcome-desc">
+                Gérez vos prospects, devis et véhicules en toute simplicité.
+              </p>
+            </div>
+          </div>
+          <div className="auth-form-section">
+            <h1>{isRegisterMode ? 'Inscription' : 'Connexion'}</h1>
+            <p className="auth-form-subtitle">
+              {isRegisterMode ? 'Créez votre compte pour accéder au CRM.' : 'Connectez-vous pour accéder à votre espace.'}
+            </p>
+            {isRegisterMode ? (
+              <form onSubmit={handleRegister} className="auth-form">
+                <div className="auth-input-wrap">
+                  <span className="auth-input-icon" aria-hidden>✉</span>
+                  <input
+                    type="email"
+                    placeholder="Email"
+                    value={registerData.email}
+                    onChange={(e) =>
+                      setRegisterData((prev) => ({ ...prev, email: e.target.value }))
+                    }
+                    required
+                  />
+                </div>
+                <div className="auth-input-wrap">
+                  <span className="auth-input-icon auth-icon-lock" aria-hidden>🔐</span>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Mot de passe"
+                    value={registerData.password}
+                    onChange={(e) =>
+                      setRegisterData((prev) => ({ ...prev, password: e.target.value }))
+                    }
+                    required
+                  />
+                  <button type="button" className="auth-show-pwd" onClick={() => setShowPassword((s) => !s)}>
+                    {showPassword ? 'Masquer' : 'Afficher'}
+                  </button>
+                </div>
+                <div className="auth-input-wrap">
+                  <span className="auth-input-icon auth-icon-lock" aria-hidden>🔐</span>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Confirmer le mot de passe"
+                    value={registerData.confirmPassword}
+                    onChange={(e) =>
+                      setRegisterData((prev) => ({ ...prev, confirmPassword: e.target.value }))
+                    }
+                    required
+                  />
+                </div>
+                <select
+                  value={registerData.role}
+                  onChange={(e) =>
+                    setRegisterData((prev) => ({ ...prev, role: e.target.value }))
+                  }
+                  className="auth-select"
+                >
+                  <option value="user">Utilisateur</option>
+                  <option value="admin">Administrateur</option>
+                </select>
+                {authError && <p className="auth-error">{authError}</p>}
+                {registerSuccess && <p className="auth-success">{registerSuccess}</p>}
+                <button type="submit" className="auth-btn-primary">S&apos;inscrire</button>
+                <div className="auth-divider">ou</div>
+                <a href={`${API_BASE}/api/auth/google`} className="auth-btn-google">
+                  <span className="auth-google-icon">G</span>
+                  S&apos;inscrire avec Google
+                </a>
+                <button type="button" className="auth-toggle" onClick={() => { setIsRegisterMode(false); setAuthError(''); setRegisterSuccess(''); }}>
+                  Déjà un compte ? Se connecter
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleLogin} className="auth-form">
+                <div className="auth-input-wrap">
+                  <span className="auth-input-icon" aria-hidden>✉</span>
+                  <input
+                    type="email"
+                    placeholder="Email"
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="auth-input-wrap">
+                  <span className="auth-input-icon auth-icon-lock" aria-hidden>🔐</span>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Mot de passe"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    required
+                  />
+                  <button type="button" className="auth-show-pwd" onClick={() => setShowPassword((s) => !s)}>
+                    {showPassword ? 'Masquer' : 'Afficher'}
+                  </button>
+                </div>
+                <div className="auth-form-options">
+                  <label className="auth-checkbox">
+                    <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} />
+                    <span>Se souvenir de moi</span>
+                  </label>
+                  <button type="button" className="auth-forgot" onClick={() => toast('Fonctionnalité à venir')}>
+                    Mot de passe oublié ?
+                  </button>
+                </div>
+                {authError && <p className="auth-error">{authError}</p>}
+                {registerSuccess && <p className="auth-success">{registerSuccess}</p>}
+                <button type="submit" className="auth-btn-primary">Se connecter</button>
+                <div className="auth-divider">ou</div>
+                <a href={`${API_BASE}/api/auth/google`} className="auth-btn-google">
+                  <span className="auth-google-icon">G</span>
+                  Se connecter avec Google
+                </a>
+                <button type="button" className="auth-toggle" onClick={() => { setIsRegisterMode(true); setAuthError(''); setRegisterSuccess(''); }}>
+                  Pas encore de compte ? S&apos;inscrire
+                </button>
+              </form>
+            )}
+          </div>
         </div>
       </div>
     )
@@ -1920,6 +1952,19 @@ function App() {
                   <p className="quick-folder">
                     {stats ? `${(stats.kpi.ca || 0).toLocaleString('fr-FR')} FCFA` : '...'}
                   </p>
+                </div>
+              </div>
+            </section>
+
+            <section className="dashboard-stats-section">
+              <div className="dashboard-stats-grid">
+                <div className="dashboard-stats-chart">
+                  <h2>Statistiques — Prospects & Devis (30 derniers jours)</h2>
+                  <DashboardChart data={chartData} loading={loading} />
+                </div>
+                <div className="dashboard-stats-calendar">
+                  <h2>Calendrier</h2>
+                  <DashboardCalendar chartData={chartData} taches={taches} />
                 </div>
               </div>
             </section>

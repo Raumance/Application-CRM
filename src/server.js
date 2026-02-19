@@ -735,6 +735,59 @@ app.get('/api/banques/matching', authRequired, async (req, res) => {
   }
 });
 
+// Dashboard chart - prospects et devis par jour (30 derniers jours)
+app.get('/api/dashboard/chart', authRequired, async (req, res) => {
+  try {
+    const days = parseInt(req.query.days, 10) || 30;
+    const start = new Date();
+    start.setDate(start.getDate() - days);
+    start.setHours(0, 0, 0, 0);
+
+    const [prospectsByDay, devisByDay] = await Promise.all([
+      Prospect.aggregate([
+        { $match: { createdAt: { $gte: start } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]),
+      Devis.aggregate([
+        { $match: { createdAt: { $gte: start } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]),
+    ]);
+
+    const byDate = {};
+    for (let i = 0; i < days; i++) {
+      const d = new Date(start);
+      d.setDate(d.getDate() + i);
+      const key = d.toISOString().slice(0, 10);
+      byDate[key] = { date: key, prospects: 0, devis: 0 };
+    }
+    prospectsByDay.forEach((p) => {
+      if (byDate[p._id]) byDate[p._id].prospects = p.count;
+    });
+    devisByDay.forEach((d) => {
+      if (byDate[d._id]) byDate[d._id].devis = d.count;
+    });
+    const chartData = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
+
+    res.json(chartData);
+  } catch (err) {
+    console.error('Erreur GET /api/dashboard/chart', err);
+    res.status(500).json({ error: 'Erreur serveur.' });
+  }
+});
+
 // Dashboard stats (cahier des charges - KPIs)
 app.get('/api/dashboard/stats', authRequired, async (req, res) => {
   try {
