@@ -21,6 +21,9 @@ const upload = multer({
 });
 const { Prospect, Tache, Vehicule, Devis, Facture, Interaction, User, RelanceEmail, Banque, ConfigRelance } = require('./models');
 const { generateDevisPDF } = require('./generateDevisPdf');
+const { syncCreate, syncUpdate, syncDelete } = require('./firestoreSync');
+const { verifyIdToken } = require('./firebaseAuth');
+const { sendPushNotification } = require('./notifications');
 
 // Scoring éligibilité (cahier des charges - 0 à 100)
 function calculerScoreEligibilite(revenu, apport, budget, duree) {
@@ -58,13 +61,17 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
-// Helper : détecte l'URL du frontend (proxy peut changer le port)
+// Helper : détecte l'URL du frontend pour les redirections OAuth
 function getFrontendUrl(req) {
   const origin = req.get('Origin') || req.get('Referer');
   if (origin) {
     try {
       const url = new URL(origin);
-      return `${url.protocol}//${url.host}`;
+      // Ignorer les origines externes (ex: redirect depuis Google)
+      const host = url.hostname || '';
+      if (!host.includes('google') && !host.includes('accounts.')) {
+        return `${url.protocol}//${url.host}`;
+      }
     } catch (_) {}
   }
   return FRONTEND_URL;
@@ -120,7 +127,8 @@ app.post('/api/auth/register', async (req, res) => {
       passwordHash,
       role: role === 'admin' ? 'admin' : 'user',
     });
-    await user.save();
+    const saved = await user.save();
+    syncCreate('users', saved, ['passwordHash']).catch((e) => console.warn('Firestore sync:', e.message));
     res.status(201).json({ message: 'Utilisateur créé' });
   } catch (err) {
     console.error('Erreur /api/auth/register', err);
@@ -162,6 +170,89 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (err) {
     console.error('Erreur /api/auth/login', err);
     res.status(500).json({ error: "Erreur serveur lors de l'authentification." });
+  }
+});
+
+// Firebase Auth - échange token Firebase contre JWT CRM
+app.post('/api/auth/firebase', async (req, res) => {
+  try {
+    const { idToken, role: requestedRole } = req.body;
+    if (!idToken) {
+      return res.status(400).json({ error: 'Token Firebase requis.' });
+    }
+
+    const decoded = await verifyIdToken(idToken);
+    if (!decoded) {
+      return res.status(401).json({ error: 'Token Firebase invalide ou expiré.' });
+    }
+
+    const email = (decoded.email || '').toLowerCase().trim();
+    if (!email) {
+      return res.status(400).json({ error: 'Email non disponible.' });
+    }
+
+    let user = await User.findOne({ $or: [{ email }, { firebaseUid: decoded.uid }] });
+    if (!user) {
+      const parts = (decoded.name || '').trim().split(/\s+/);
+      const role = requestedRole === 'admin' ? 'admin' : 'user';
+      user = new User({
+        email,
+        firebaseUid: decoded.uid,
+        prenom: parts[0] || null,
+        nom: parts.slice(1).join(' ') || null,
+        profileImage: decoded.picture || null,
+        role,
+      });
+      await user.save();
+      syncCreate('users', user, ['passwordHash']).catch(() => {});
+    } else {
+      if (!user.firebaseUid) {
+        user.firebaseUid = decoded.uid;
+        await user.save();
+      }
+      if (decoded.picture && !user.profileImage) {
+        user.profileImage = decoded.picture;
+        await user.save();
+      }
+    }
+
+    const token = jwt.sign(
+      { userId: user._id.toString(), email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '8h' }
+    );
+
+    res.json({
+      token,
+      email: user.email,
+      role: user.role,
+      profileImage: user.profileImage,
+    });
+  } catch (err) {
+    console.error('Erreur /api/auth/firebase', err);
+    res.status(500).json({ error: "Erreur lors de l'authentification Firebase." });
+  }
+});
+
+// Enregistrer le token FCM pour les notifications push
+app.post('/api/auth/fcm-token', authRequired, async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ error: 'Token FCM requis.' });
+    }
+    const user = await User.findById(req.user.userId);
+    if (!user) return res.status(404).json({ error: 'Utilisateur introuvable.' });
+    const tokens = user.fcmTokens || [];
+    if (!tokens.includes(token)) {
+      tokens.push(token);
+      user.fcmTokens = tokens;
+      await user.save();
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Erreur POST /api/auth/fcm-token', err);
+    res.status(500).json({ error: 'Erreur serveur.' });
   }
 });
 
@@ -302,6 +393,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
         role: 'user',
       });
       await user.save();
+      syncCreate('users', user, ['passwordHash']).catch((e) => console.warn('Firestore sync:', e.message));
     } else {
       if (!user.googleId) {
         user.googleId = googleUser.id;
@@ -318,6 +410,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
       user.profileImage = googleUser.picture;
       await user.save();
     }
+    syncCreate('users', user, ['passwordHash']).catch((e) => console.warn('Firestore sync:', e.message));
 
     const token = jwt.sign(
       { userId: user._id.toString(), email: user.email, role: user.role },
@@ -387,6 +480,15 @@ app.post('/api/prospects', authRequired, async (req, res) => {
     });
 
     const saved = await prospect.save();
+    syncCreate('prospects', saved).catch((e) => console.warn('Firestore sync:', e.message));
+    const user = await User.findById(req.user.userId).lean();
+    if (user?.fcmTokens?.length) {
+      sendPushNotification(
+        user.fcmTokens,
+        { title: 'Nouveau prospect', body: [prenom, nom].filter(Boolean).join(' ') || idContact },
+        { type: 'prospect', id: saved._id.toString() }
+      ).catch(() => {});
+    }
     res.status(201).json(saved.toObject());
   } catch (err) {
     console.error('Erreur POST /api/prospects', err);
@@ -415,6 +517,7 @@ app.put('/api/prospects/:id', authRequired, async (req, res) => {
       new: true,
       runValidators: true,
     }).lean();
+    syncUpdate('prospects', id, updated).catch((e) => console.warn('Firestore sync:', e.message));
     res.json(updated);
   } catch (err) {
     console.error('Erreur PUT /api/prospects/:id', err);
@@ -429,6 +532,7 @@ app.delete('/api/prospects/:id', authRequired, async (req, res) => {
     if (!deleted) {
       return res.status(404).json({ error: 'Prospect introuvable.' });
     }
+    syncDelete('prospects', id).catch((e) => console.warn('Firestore sync:', e.message));
     res.json({ success: true });
   } catch (err) {
     console.error('Erreur DELETE /api/prospects/:id', err);
@@ -459,6 +563,7 @@ app.post('/api/interactions', authRequired, async (req, res) => {
     });
 
     const saved = await interaction.save();
+    syncCreate('interactions', saved).catch((e) => console.warn('Firestore sync:', e.message));
     res.status(201).json(saved.toObject());
   } catch (err) {
     console.error('Erreur POST /api/interactions', err);
@@ -480,6 +585,7 @@ app.put('/api/interactions/:id', authRequired, async (req, res) => {
     if (!updated) {
       return res.status(404).json({ error: 'Interaction introuvable.' });
     }
+    syncUpdate('interactions', id, updated).catch((e) => console.warn('Firestore sync:', e.message));
     res.json(updated);
   } catch (err) {
     console.error('Erreur PUT /api/interactions/:id', err);
@@ -494,6 +600,7 @@ app.delete('/api/interactions/:id', authRequired, async (req, res) => {
     if (!deleted) {
       return res.status(404).json({ error: 'Interaction introuvable.' });
     }
+    syncDelete('interactions', id).catch((e) => console.warn('Firestore sync:', e.message));
     res.json({ success: true });
   } catch (err) {
     console.error('Erreur DELETE /api/interactions/:id', err);
@@ -524,6 +631,15 @@ app.post('/api/taches', authRequired, async (req, res) => {
     });
 
     const saved = await tache.save();
+    syncCreate('taches', saved).catch((e) => console.warn('Firestore sync:', e.message));
+    const user = await User.findById(req.user.userId).lean();
+    if (user?.fcmTokens?.length) {
+      sendPushNotification(
+        user.fcmTokens,
+        { title: 'Tâche créée', body: (description || '').slice(0, 80) },
+        { type: 'tache', id: saved._id.toString() }
+      ).catch(() => {});
+    }
     res.status(201).json(saved.toObject());
   } catch (err) {
     console.error('Erreur POST /api/taches', err);
@@ -545,6 +661,7 @@ app.put('/api/taches/:id', authRequired, async (req, res) => {
     if (!updated) {
       return res.status(404).json({ error: 'Tâche introuvable.' });
     }
+    syncUpdate('taches', id, updated).catch((e) => console.warn('Firestore sync:', e.message));
     res.json(updated);
   } catch (err) {
     console.error('Erreur PUT /api/taches/:id', err);
@@ -559,6 +676,7 @@ app.delete('/api/taches/:id', authRequired, async (req, res) => {
     if (!deleted) {
       return res.status(404).json({ error: 'Tâche introuvable.' });
     }
+    syncDelete('taches', id).catch((e) => console.warn('Firestore sync:', e.message));
     res.json({ success: true });
   } catch (err) {
     console.error('Erreur DELETE /api/taches/:id', err);
@@ -592,6 +710,7 @@ app.post('/api/vehicules', authRequired, async (req, res) => {
     });
 
     const saved = await vehicule.save();
+    syncCreate('vehicules', saved).catch((e) => console.warn('Firestore sync:', e.message));
     res.status(201).json(saved.toObject());
   } catch (err) {
     console.error('Erreur POST /api/vehicules', err);
@@ -612,6 +731,7 @@ app.put('/api/vehicules/:id', authRequired, async (req, res) => {
     if (!updated) {
       return res.status(404).json({ error: 'Véhicule introuvable.' });
     }
+    syncUpdate('vehicules', id, updated).catch((e) => console.warn('Firestore sync:', e.message));
     res.json(updated);
   } catch (err) {
     console.error('Erreur PUT /api/vehicules/:id', err);
@@ -626,6 +746,7 @@ app.delete('/api/vehicules/:id', authRequired, async (req, res) => {
     if (!deleted) {
       return res.status(404).json({ error: 'Véhicule introuvable.' });
     }
+    syncDelete('vehicules', id).catch((e) => console.warn('Firestore sync:', e.message));
     res.json({ success: true });
   } catch (err) {
     console.error('Erreur DELETE /api/vehicules/:id', err);
@@ -688,6 +809,7 @@ app.post('/api/banques', authRequired, async (req, res) => {
   try {
     const b = new Banque(req.body);
     const saved = await b.save();
+    syncCreate('banques', saved).catch((e) => console.warn('Firestore sync:', e.message));
     res.status(201).json(saved.toObject());
   } catch (err) {
     console.error('Erreur POST /api/banques', err);
@@ -697,8 +819,10 @@ app.post('/api/banques', authRequired, async (req, res) => {
 
 app.put('/api/banques/:id', authRequired, async (req, res) => {
   try {
-    const updated = await Banque.findByIdAndUpdate(req.params.id, req.body, { new: true }).lean();
+    const { id } = req.params;
+    const updated = await Banque.findByIdAndUpdate(id, req.body, { new: true }).lean();
     if (!updated) return res.status(404).json({ error: 'Banque introuvable.' });
+    syncUpdate('banques', id, updated).catch((e) => console.warn('Firestore sync:', e.message));
     res.json(updated);
   } catch (err) {
     console.error('Erreur PUT /api/banques', err);
@@ -708,8 +832,10 @@ app.put('/api/banques/:id', authRequired, async (req, res) => {
 
 app.delete('/api/banques/:id', authRequired, async (req, res) => {
   try {
-    const deleted = await Banque.findByIdAndDelete(req.params.id);
+    const { id } = req.params;
+    const deleted = await Banque.findByIdAndDelete(id);
     if (!deleted) return res.status(404).json({ error: 'Banque introuvable.' });
+    syncDelete('banques', id).catch((e) => console.warn('Firestore sync:', e.message));
     res.json({ success: true });
   } catch (err) {
     console.error('Erreur DELETE /api/banques', err);
@@ -902,6 +1028,15 @@ app.post('/api/devis', authRequired, async (req, res) => {
 
     const devis = new Devis(data);
     const saved = await devis.save();
+    syncCreate('devis', saved).catch((e) => console.warn('Firestore sync:', e.message));
+    const user = await User.findById(req.user.userId).lean();
+    if (user?.fcmTokens?.length) {
+      sendPushNotification(
+        user.fcmTokens,
+        { title: 'Devis créé', body: (numero || client || '').toString().slice(0, 60) },
+        { type: 'devis', id: saved._id.toString() }
+      ).catch(() => {});
+    }
     res.status(201).json(saved.toObject());
   } catch (err) {
     console.error('Erreur POST /api/devis', err);
@@ -927,6 +1062,7 @@ app.put('/api/devis/:id', authRequired, async (req, res) => {
     if (!updated) {
       return res.status(404).json({ error: 'Devis introuvable.' });
     }
+    syncUpdate('devis', id, updated).catch((e) => console.warn('Firestore sync:', e.message));
     res.json(updated);
   } catch (err) {
     console.error('Erreur PUT /api/devis/:id', err);
@@ -966,6 +1102,7 @@ app.delete('/api/devis/:id', authRequired, async (req, res) => {
     if (!deleted) {
       return res.status(404).json({ error: 'Devis introuvable.' });
     }
+    syncDelete('devis', id).catch((e) => console.warn('Firestore sync:', e.message));
     res.json({ success: true });
   } catch (err) {
     console.error('Erreur DELETE /api/devis/:id', err);
@@ -998,6 +1135,15 @@ app.post('/api/factures', authRequired, async (req, res) => {
     });
 
     const saved = await facture.save();
+    syncCreate('factures', saved).catch((e) => console.warn('Firestore sync:', e.message));
+    const user = await User.findById(req.user.userId).lean();
+    if (user?.fcmTokens?.length) {
+      sendPushNotification(
+        user.fcmTokens,
+        { title: 'Facture créée', body: `${numero} - ${client}`.slice(0, 60) },
+        { type: 'facture', id: saved._id.toString() }
+      ).catch(() => {});
+    }
     res.status(201).json(saved.toObject());
   } catch (err) {
     console.error('Erreur POST /api/factures', err);
@@ -1022,6 +1168,7 @@ app.put('/api/factures/:id', authRequired, async (req, res) => {
     if (!updated) {
       return res.status(404).json({ error: 'Facture introuvable.' });
     }
+    syncUpdate('factures', id, updated).catch((e) => console.warn('Firestore sync:', e.message));
     res.json(updated);
   } catch (err) {
     console.error('Erreur PUT /api/factures/:id', err);
@@ -1036,6 +1183,7 @@ app.delete('/api/factures/:id', authRequired, async (req, res) => {
     if (!deleted) {
       return res.status(404).json({ error: 'Facture introuvable.' });
     }
+    syncDelete('factures', id).catch((e) => console.warn('Firestore sync:', e.message));
     res.json({ success: true });
   } catch (err) {
     console.error('Erreur DELETE /api/factures/:id', err);
@@ -1065,6 +1213,7 @@ app.post('/api/relances-emails', authRequired, async (req, res) => {
     });
 
     const saved = await relance.save();
+    syncCreate('relancesemails', saved).catch((e) => console.warn('Firestore sync:', e.message));
     res.status(201).json(saved.toObject());
   } catch (err) {
     console.error('Erreur POST /api/relances-emails', err);
@@ -1083,6 +1232,7 @@ app.put('/api/relances-emails/:id', authRequired, async (req, res) => {
     if (!updated) {
       return res.status(404).json({ error: 'Modèle de relance introuvable.' });
     }
+    syncUpdate('relancesemails', id, updated).catch((e) => console.warn('Firestore sync:', e.message));
     res.json(updated);
   } catch (err) {
     console.error('Erreur PUT /api/relances-emails/:id', err);
@@ -1097,6 +1247,7 @@ app.delete('/api/relances-emails/:id', authRequired, async (req, res) => {
     if (!deleted) {
       return res.status(404).json({ error: 'Modèle de relance introuvable.' });
     }
+    syncDelete('relancesemails', id).catch((e) => console.warn('Firestore sync:', e.message));
     res.json({ success: true });
   } catch (err) {
     console.error('Erreur DELETE /api/relances-emails/:id', err);
@@ -1133,6 +1284,7 @@ app.put('/api/users/:id', authRequired, async (req, res) => {
     if (!updated) {
       return res.status(404).json({ error: 'Utilisateur introuvable.' });
     }
+    syncUpdate('users', id, update).catch((e) => console.warn('Firestore sync:', e.message));
     res.json(updated);
   } catch (err) {
     console.error('Erreur PUT /api/users/:id', err);
@@ -1141,7 +1293,6 @@ app.put('/api/users/:id', authRequired, async (req, res) => {
 });
 
 app.delete('/api/users/:id', authRequired, async (req, res) => {
-  // Seuls les admins peuvent supprimer les utilisateurs
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Accès refusé. Admin requis.' });
   }
@@ -1155,6 +1306,7 @@ app.delete('/api/users/:id', authRequired, async (req, res) => {
     if (!deleted) {
       return res.status(404).json({ error: 'Utilisateur introuvable.' });
     }
+    syncDelete('users', id).catch((e) => console.warn('Firestore sync:', e.message));
     res.json({ success: true });
   } catch (err) {
     console.error('Erreur DELETE /api/users/:id', err);

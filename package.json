@@ -13,7 +13,9 @@
     "pm2:restart": "pm2 restart crm-carwazplan-backend",
     "pm2:logs": "pm2 logs crm-carwazplan-backend",
     "pm2:status": "pm2 status",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "db:init": "node scripts/init-mongodb-collections.js",
+    "verify:auth": "node scripts/verify-auth.js http://localhost:4000"
   },
   "keywords": [],
   "author": "",
@@ -24,6 +26,8 @@
     "cors": "^2.8.6",
     "dotenv": "^17.2.4",
     "express": "^5.2.1",
+    "firebase": "^12.9.0",
+    "firebase-admin": "^13.6.1",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.2.0",
     "multer": "^2.0.2",

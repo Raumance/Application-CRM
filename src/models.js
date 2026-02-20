@@ -125,11 +125,13 @@ const userSchema = new mongoose.Schema(
     email: { type: String, unique: true, required: true },
     passwordHash: { type: String, required: false }, // Optionnel pour utilisateurs Google
     googleId: { type: String, unique: true, sparse: true },
+    firebaseUid: { type: String, unique: true, sparse: true },
     nom: { type: String },
     prenom: { type: String },
     departement: { type: String },
     profileImage: { type: String }, // URL ou base64 de la photo de profil
     role: { type: String, enum: ['admin', 'user'], default: 'user' },
+    fcmTokens: [{ type: String }], // Tokens pour notifications push
   },
   { timestamps: true }
 );

@@ -28,11 +28,12 @@ export function exportToCSV(data, filename, headers) {
 // Export PDF simple (sans bibliothèque externe - génération HTML puis impression)
 export function exportToPDF(title, headers, data, filename) {
   const printWindow = window.open('', '_blank')
+  const docTitle = filename || title
   const htmlContent = `
     <!DOCTYPE html>
     <html>
     <head>
-      <title>${title}</title>
+      <title>${docTitle}</title>
       <style>
         body {
           font-family: Arial, sans-serif;

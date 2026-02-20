@@ -1,5 +1,15 @@
 import { useEffect, useState, useMemo } from 'react'
 import './App.css'
+import {
+  auth,
+  signInWithEmailAndPassword as fbSignIn,
+  createUserWithEmailAndPassword as fbCreateUser,
+  signInWithPopup,
+  GoogleAuthProvider,
+  requestNotificationPermission,
+  getFCMToken,
+  onForegroundMessage,
+} from './firebase'
 import { exportToCSV, exportToPDF } from './exportUtils'
 import { useToast } from './contexts/ToastContext'
 import { useConfirm } from './contexts/ConfirmContext'
@@ -7,8 +17,36 @@ import { useDebounce } from './hooks/useDebounce'
 import { DashboardChart } from './components/DashboardChart'
 import { DashboardCalendar } from './components/DashboardCalendar'
 
-// En dev sur localhost : utiliser directement le backend pour éviter les problèmes de proxy (ex: PDF)
-const API_BASE = import.meta.env.VITE_API_URL ?? (typeof window !== 'undefined' && window.location?.hostname === 'localhost' ? 'http://localhost:4000' : '')
+// URL du backend API
+// - VITE_API_URL : défini en build (ex: déploiement)
+// - localhost/127.0.0.1 : backend sur http://localhost:4000
+// - IP locale (192.168.x.x, 10.x.x.x) : backend sur même machine, port 4000
+const getApiBase = () => {
+  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL
+  if (typeof window === 'undefined') return ''
+  const h = window.location?.hostname || ''
+  if (['localhost', '127.0.0.1'].includes(h)) return 'http://localhost:4000'
+  if (/^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(h)) return `http://${h}:4000`
+  return ''
+}
+const API_BASE = getApiBase()
+
+/** Parse la réponse en JSON. Évite "Unexpected token '<'" quand le backend retourne du HTML. */
+async function safeJson(res) {
+  const text = await res.text()
+  const t = text.trim()
+  if (t.startsWith('<') || t.startsWith('<!')) {
+    throw new Error('Le serveur est inaccessible. Vérifiez que le backend est démarré (npm start) ou que l\'URL API est correcte (VITE_API_URL).')
+  }
+  try {
+    return text ? JSON.parse(text) : {}
+  } catch {
+    throw new Error('Réponse serveur invalide.')
+  }
+}
+
+/** Alias pour compatibilité login/register */
+const parseJsonResponse = safeJson
 
 function App() {
   const [token, setToken] = useState(() => {
@@ -23,10 +61,10 @@ function App() {
     }
     if (urlError) {
       const messages = {
-        google_config: 'Connexion Google non configurée.',
-        google_token: 'Erreur lors de la connexion Google.',
+        google_config: 'Connexion Google non configurée. Ajoutez GOOGLE_CLIENT_ID et GOOGLE_CLIENT_SECRET dans le fichier .env (voir CONFIGURATION_GOOGLE.md).',
+        google_token: 'Erreur lors de la connexion Google. Vérifiez vos identifiants dans .env.',
         google_email: 'Impossible de récupérer l\'email Google.',
-        google_error: 'Une erreur est survenue.',
+        google_error: 'Une erreur est survenue lors de la connexion Google.',
       }
       setTimeout(() => alert(messages[urlError] || messages.google_error), 100)
       window.history.replaceState({}, '', window.location.pathname)
@@ -285,50 +323,50 @@ function App() {
         }
 
         if (!statsRes.ok) {
-          const errData = await statsRes.json().catch(() => ({}))
+          const errData = await safeJson(statsRes).catch(() => ({}))
           throw new Error(
             errData.error || `Erreur stats (${statsRes.status}): ${statsRes.statusText}`
           )
         }
         if (!devisRes.ok) {
-          const errData = await devisRes.json().catch(() => ({}))
+          const errData = await safeJson(devisRes).catch(() => ({}))
           throw new Error(
             errData.error || `Erreur devis (${devisRes.status}): ${devisRes.statusText}`
           )
         }
         if (!prospectsRes.ok) {
-          const errData = await prospectsRes.json().catch(() => ({}))
+          const errData = await safeJson(prospectsRes).catch(() => ({}))
           throw new Error(
             errData.error ||
               `Erreur prospects (${prospectsRes.status}): ${prospectsRes.statusText}`
           )
         }
         if (!tachesRes.ok) {
-          const errData = await tachesRes.json().catch(() => ({}))
+          const errData = await safeJson(tachesRes).catch(() => ({}))
           throw new Error(
             errData.error || `Erreur tâches (${tachesRes.status}): ${tachesRes.statusText}`
           )
         }
         if (!vehiculesRes.ok) {
-          const errData = await vehiculesRes.json().catch(() => ({}))
+          const errData = await safeJson(vehiculesRes).catch(() => ({}))
           throw new Error(
             errData.error ||
               `Erreur véhicules (${vehiculesRes.status}): ${vehiculesRes.statusText}`
           )
         }
 
-        const statsJson = await statsRes.json()
-        const chartJson = chartRes.ok ? await chartRes.json() : []
-        const meJson = meRes.ok ? await meRes.json() : null
-        const devisJson = await devisRes.json()
-        const prospectsJson = await prospectsRes.json()
-        const tachesJson = await tachesRes.json()
-        const vehiculesJson = await vehiculesRes.json()
-        const interactionsJson = await interactionsRes.json()
-        const facturesJson = await facturesRes.json()
-        const relancesEmailsJson = await relancesEmailsRes.json()
-        const banquesJson = banquesRes?.ok ? await banquesRes.json() : []
-        const usersJson = usersRes?.ok ? await usersRes.json() : []
+        const statsJson = await safeJson(statsRes)
+        const chartJson = chartRes.ok ? await safeJson(chartRes) : []
+        const meJson = meRes.ok ? await safeJson(meRes) : null
+        const devisJson = await safeJson(devisRes)
+        const prospectsJson = await safeJson(prospectsRes)
+        const tachesJson = await safeJson(tachesRes)
+        const vehiculesJson = await safeJson(vehiculesRes)
+        const interactionsJson = await safeJson(interactionsRes)
+        const facturesJson = await safeJson(facturesRes)
+        const relancesEmailsJson = await safeJson(relancesEmailsRes)
+        const banquesJson = banquesRes?.ok ? await safeJson(banquesRes) : []
+        const usersJson = usersRes?.ok ? await safeJson(usersRes) : []
 
         setStats(statsJson)
         setChartData(chartJson)
@@ -351,6 +389,29 @@ function App() {
     }
 
     loadData()
+  }, [token])
+
+  // Enregistrer le token FCM pour les notifications push après connexion
+  useEffect(() => {
+    if (!token || !API_BASE) return
+    const unsubForeground = onForegroundMessage((payload) => {
+      const n = payload?.notification
+      if (n?.title || n?.body) toast(`${n?.title || ''} ${n?.body || ''}`.trim())
+    })
+    ;(async () => {
+      const granted = await requestNotificationPermission()
+      if (!granted) return
+      const fcmToken = await getFCMToken()
+      if (!fcmToken) return
+      try {
+        await fetch(`${API_BASE}/api/auth/fcm-token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ token: fcmToken }),
+        })
+      } catch (_) {}
+    })()
+    return () => unsubForeground?.()
   }, [token])
 
   useEffect(() => {
@@ -381,7 +442,7 @@ function App() {
         const headers = { Authorization: `Bearer ${token}` }
         const res = await fetch(`${API_BASE}/api/devis/all`, { headers })
         if (res.ok) {
-          const allDevisJson = await res.json()
+          const allDevisJson = await safeJson(res)
           setDevisAll(allDevisJson)
         }
       } catch (err) {
@@ -410,7 +471,7 @@ function App() {
         throw new Error("Erreur lors de la création du prospect")
       }
 
-      const created = await res.json()
+      const created = await safeJson(res)
       setProspects((prev) => [created, ...prev])
       setNewProspect({
         prenom: '',
@@ -466,7 +527,7 @@ function App() {
       if (!res.ok) {
         throw new Error('Erreur lors de la mise à jour du prospect')
       }
-      const updated = await res.json()
+      const updated = await safeJson(res)
       setProspects((prev) =>
         prev.map((p) => (p._id === updated._id ? updated : p))
       )
@@ -512,7 +573,7 @@ function App() {
         throw new Error("Erreur lors de la création de la tâche")
       }
 
-      const created = await res.json()
+      const created = await safeJson(res)
       setTaches((prev) => [created, ...prev])
       setNewTache({
         description: '',
@@ -550,7 +611,7 @@ function App() {
       if (!res.ok) {
         throw new Error('Erreur lors de la mise à jour de la tâche')
       }
-      const updated = await res.json()
+      const updated = await safeJson(res)
       setTaches((prev) =>
         prev.map((t) => (t._id === updated._id ? updated : t))
       )
@@ -600,7 +661,7 @@ function App() {
         throw new Error("Erreur lors de la création du véhicule")
       }
 
-      const created = await res.json()
+      const created = await safeJson(res)
       setVehicules((prev) => [created, ...prev])
       setNewVehicule({
         marque: '',
@@ -646,7 +707,7 @@ function App() {
       if (!res.ok) {
         throw new Error('Erreur lors de la mise à jour du véhicule')
       }
-      const updated = await res.json()
+      const updated = await safeJson(res)
       setVehicules((prev) =>
         prev.map((v) => (v._id === updated._id ? updated : v))
       )
@@ -695,7 +756,7 @@ function App() {
         throw new Error("Erreur lors de la création du devis")
       }
 
-      const created = await res.json()
+      const created = await safeJson(res)
       // on n'affiche que les devis "En cours" dans le tableau
       if (created.statut === 'En cours') {
         setDevis((prev) => [created, ...prev])
@@ -827,7 +888,7 @@ function App() {
           body: JSON.stringify(payload),
         })
         if (!res.ok) throw new Error('Erreur lors de la mise à jour')
-        const updated = await res.json()
+        const updated = await safeJson(res)
         setDevisAll((prev) => prev.map((d) => (d._id === updated._id ? updated : d)))
         setDevis((prev) => prev.map((d) => (d._id === updated._id ? updated : d)))
         setDevisModalOpen(false)
@@ -839,14 +900,19 @@ function App() {
           body: JSON.stringify(payload),
         })
         if (!res.ok) throw new Error('Erreur lors de la création')
-        const created = await res.json()
+        const created = await safeJson(res)
         setDevisAll((prev) => [created, ...prev])
         if (created.statut === 'En cours') setDevis((prev) => [created, ...prev])
         setDevisModalOpen(false)
         toast.success('Devis créé avec succès')
       }
     } catch (err) {
-      toast.error(err.message || 'Erreur inconnue')
+      const msg = err.message || 'Erreur inconnue'
+      if (msg.includes('Failed to fetch') || msg.includes('fetch')) {
+        toast.error('Impossible de joindre le serveur. Vérifiez que le backend est démarré (port 4000). Lancez : npm run dev ou npm start')
+      } else {
+        toast.error(msg)
+      }
     } finally {
       setSavingDevis(false)
     }
@@ -870,7 +936,7 @@ function App() {
       })
       const contentType = res.headers.get('Content-Type') || ''
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({ error: res.statusText }))
+        const errData = await safeJson(res).catch(() => ({ error: res.statusText }))
         const msg = errData.detail ? `${errData.error}: ${errData.detail}` : (errData.error || `Erreur ${res.status}`)
         throw new Error(msg)
       }
@@ -916,7 +982,7 @@ function App() {
         throw new Error('Erreur lors de la création de l\'interaction')
       }
 
-      const created = await res.json()
+      const created = await safeJson(res)
       setInteractions((prev) => [created, ...prev])
       setNewInteraction({
         prospectId: '',
@@ -956,7 +1022,7 @@ function App() {
       if (!res.ok) {
         throw new Error('Erreur lors de la mise à jour de l\'interaction')
       }
-      const updated = await res.json()
+      const updated = await safeJson(res)
       setInteractions((prev) =>
         prev.map((i) => (i._id === updated._id ? updated : i))
       )
@@ -1006,7 +1072,7 @@ function App() {
         throw new Error('Erreur lors de la création de la facture')
       }
 
-      const created = await res.json()
+      const created = await safeJson(res)
       setFactures((prev) => [created, ...prev])
       setNewFacture({
         numero: '',
@@ -1057,7 +1123,7 @@ function App() {
       if (!res.ok) {
         throw new Error('Erreur lors de la mise à jour de la facture')
       }
-      const updated = await res.json()
+      const updated = await safeJson(res)
       setFactures((prev) =>
         prev.map((f) => (f._id === updated._id ? updated : f))
       )
@@ -1107,7 +1173,7 @@ function App() {
         throw new Error('Erreur lors de la création du modèle de relance')
       }
 
-      const created = await res.json()
+      const created = await safeJson(res)
       setRelancesEmails((prev) => [created, ...prev])
       setNewRelanceEmail({
         nom: '',
@@ -1148,7 +1214,7 @@ function App() {
       if (!res.ok) {
         throw new Error('Erreur lors de la mise à jour du modèle de relance')
       }
-      const updated = await res.json()
+      const updated = await safeJson(res)
       setRelancesEmails((prev) =>
         prev.map((r) => (r._id === updated._id ? updated : r))
       )
@@ -1192,7 +1258,7 @@ function App() {
         }),
       })
       if (!res.ok) throw new Error('Erreur lors de l\'ajout')
-      const created = await res.json()
+      const created = await safeJson(res)
       setBanques((prev) => [created, ...prev])
       setNewBanque({ nom: '', tauxMin: '', tauxMax: '', apportMinPourcent: 20, dureeMaxMois: 60 })
     } catch (err) {
@@ -1227,7 +1293,7 @@ function App() {
         }),
       })
       if (!res.ok) throw new Error('Erreur lors de la mise à jour')
-      const updated = await res.json()
+      const updated = await safeJson(res)
       setBanques((prev) => prev.map((b) => (b._id === updated._id ? updated : b)))
       setEditingBanqueId(null)
     } catch (err) {
@@ -1262,7 +1328,7 @@ function App() {
       if (!res.ok) {
         throw new Error('Erreur lors de la mise à jour du rôle')
       }
-      const updated = await res.json()
+      const updated = await safeJson(res)
       setUsers((prev) =>
         prev.map((u) => (u._id === updated._id ? updated : u))
       )
@@ -1280,7 +1346,7 @@ function App() {
         },
       })
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({}))
+        const errData = await safeJson(res).catch(() => ({}))
         throw new Error(errData.error || 'Erreur lors de la suppression')
       }
       setUsers((prev) => prev.filter((u) => u._id !== userId && u.id !== userId))
@@ -1311,7 +1377,7 @@ function App() {
         },
         body: formData,
       })
-      const data = await res.json().catch(() => ({}))
+      const data = await safeJson(res).catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Erreur lors de la mise à jour')
       setCurrentUser(data)
     } catch (err) {
@@ -1334,7 +1400,7 @@ function App() {
           departement: profilDepartement.trim() || null,
         }),
       })
-      const data = await res.json().catch(() => ({}))
+      const data = await safeJson(res).catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Erreur lors de la mise à jour')
       setCurrentUser(data)
       toast.success('Profil mis à jour')
@@ -1536,22 +1602,64 @@ function App() {
       } else {
         localStorage.removeItem('remember_email')
       }
+      // 1. Essayer Firebase Auth d'abord
+      try {
+        const cred = await fbSignIn(auth, authEmail, authPassword)
+        const idToken = await cred.user.getIdToken()
+        const res = await fetch(`${API_BASE}/api/auth/firebase`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ idToken }),
+        })
+        const data = await parseJsonResponse(res)
+        if (res.ok) {
+          setToken(data.token)
+          localStorage.setItem('token', data.token)
+          setAuthPassword('')
+          return
+        }
+      } catch (_) {}
+      // 2. Fallback : authentification CRM classique
       const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: authEmail, password: authPassword }),
       })
+      const data = await parseJsonResponse(res)
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.error || 'Identifiants invalides')
+        throw new Error(data.error || 'Identifiants invalides')
       }
-      const data = await res.json()
       setToken(data.token)
       localStorage.setItem('token', data.token)
       setAuthPassword('')
     } catch (err) {
       setAuthError(err.message || 'Erreur de connexion')
     }
+  }
+
+  async function handleGoogleLogin(role = 'user') {
+    setAuthError('')
+    try {
+      const result = await signInWithPopup(auth, new GoogleAuthProvider())
+      const idToken = await result.user.getIdToken()
+      const res = await fetch(`${API_BASE}/api/auth/firebase`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken, role }),
+      })
+      const data = await parseJsonResponse(res)
+      if (!res.ok) {
+        throw new Error(data.error || 'Erreur authentification Google')
+      }
+      setToken(data.token)
+      localStorage.setItem('token', data.token)
+    } catch (err) {
+      setAuthError(err.message || 'Erreur de connexion Google')
+    }
+  }
+
+  async function handleGoogleRegister(role) {
+    await handleGoogleLogin(role)
   }
 
   async function handleRegister(e) {
@@ -1575,29 +1683,30 @@ function App() {
     }
 
     try {
-      const res = await fetch(`${API_BASE}/api/auth/register`, {
+      // 1. Créer le compte Firebase Auth
+      const cred = await fbCreateUser(auth, registerData.email, registerData.password)
+      const idToken = await cred.user.getIdToken()
+      // 2. Échanger contre JWT CRM (création utilisateur MongoDB avec role)
+      const res = await fetch(`${API_BASE}/api/auth/firebase`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: registerData.email,
-          password: registerData.password,
-          role: registerData.role,
-        }),
+        body: JSON.stringify({ idToken, role: registerData.role || 'user' }),
       })
+      const data = await parseJsonResponse(res)
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.error || "Erreur lors de l'inscription")
+        throw new Error(data.error || "Erreur lors de l'inscription")
       }
-      setRegisterSuccess('Compte créé avec succès ! Vous pouvez maintenant vous connecter.')
-      setRegisterData({
-        email: '',
-        password: '',
-        confirmPassword: '',
-        role: 'user',
-      })
+      setToken(data.token)
+      localStorage.setItem('token', data.token)
+      setRegisterSuccess('Compte créé ! Vous êtes connecté.')
+      setRegisterData({ email: '', password: '', confirmPassword: '', role: 'user' })
       setIsRegisterMode(false)
     } catch (err) {
-      setAuthError(err.message || "Erreur lors de l'inscription")
+      if (err.code === 'auth/email-already-in-use') {
+        setAuthError('Cet email est déjà utilisé. Essayez de vous connecter.')
+      } else {
+        setAuthError(err.message || "Erreur lors de l'inscription")
+      }
     }
   }
 
@@ -1675,10 +1784,10 @@ function App() {
                 {registerSuccess && <p className="auth-success">{registerSuccess}</p>}
                 <button type="submit" className="auth-btn-primary">S&apos;inscrire</button>
                 <div className="auth-divider">ou</div>
-                <a href={`${API_BASE}/api/auth/google`} className="auth-btn-google">
+                <button type="button" className="auth-btn-google" onClick={() => handleGoogleRegister(registerData.role)}>
                   <span className="auth-google-icon">G</span>
                   S&apos;inscrire avec Google
-                </a>
+                </button>
                 <button type="button" className="auth-toggle" onClick={() => { setIsRegisterMode(false); setAuthError(''); setRegisterSuccess(''); }}>
                   Déjà un compte ? Se connecter
                 </button>
@@ -1721,10 +1830,10 @@ function App() {
                 {registerSuccess && <p className="auth-success">{registerSuccess}</p>}
                 <button type="submit" className="auth-btn-primary">Se connecter</button>
                 <div className="auth-divider">ou</div>
-                <a href={`${API_BASE}/api/auth/google`} className="auth-btn-google">
+                <button type="button" className="auth-btn-google" onClick={() => handleGoogleLogin('user')}>
                   <span className="auth-google-icon">G</span>
                   Se connecter avec Google
-                </a>
+                </button>
                 <button type="button" className="auth-toggle" onClick={() => { setIsRegisterMode(true); setAuthError(''); setRegisterSuccess(''); }}>
                   Pas encore de compte ? S&apos;inscrire
                 </button>

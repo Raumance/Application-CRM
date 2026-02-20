@@ -1,0 +1,32 @@
+# Déploiement Render.com - CRM CarWazPlan
+# Documentation : https://render.com/docs/blueprint-spec
+#
+# Après le premier déploiement, ajoutez dans le Dashboard (Environment) :
+#   MONGODB_URI  = votre URI MongoDB Atlas
+#   JWT_SECRET   = clé secrète (openssl rand -base64 48)
+#   FRONTEND_URL = https://votre-service.onrender.com (l'URL affichée par Render)
+
+services:
+  - type: web
+    runtime: node
+    name: crm-carwazplan
+    region: frankfurt
+    plan: free
+
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false

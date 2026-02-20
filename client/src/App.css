@@ -1,3 +1,14 @@
+/* Palette CRM - Bleu dominant (confiance), Rouge accent (urgence/alerte) */
+:root {
+  --crm-blue-600: #1d4ed8;
+  --crm-blue-500: #2563eb;
+  --crm-blue-400: #3b82f6;
+  --crm-blue-900: #1e3a8a;
+  --crm-blue-800: #1e40af;
+  --crm-red-600: #dc2626;
+  --crm-red-700: #b91c1c;
+}
+
 *,
 *::before,
 *::after {
@@ -12,7 +23,7 @@ body {
 .dashboard-root {
   display: flex;
   min-height: 100vh;
-  background: linear-gradient(160deg, #dbeafe 0%, #e0e7ff 50%, #fef2f2 100%);
+  background: linear-gradient(160deg, #dbeafe 0%, #e0e7ff 50%, #eff6ff 100%);
   color: #0f172a;
 }
 
@@ -40,7 +51,7 @@ body {
   width: 40px;
   height: 40px;
   border-radius: 12px;
-  background: linear-gradient(135deg, #1d4ed8 0%, #dc2626 100%);
+  background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -233,7 +244,7 @@ body {
   width: 44px;
   height: 44px;
   border-radius: 14px;
-  background: linear-gradient(135deg, #1d4ed8 0%, #dc2626 100%);
+  background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%);
   color: white;
   display: flex;
   align-items: center;
@@ -286,8 +297,8 @@ body {
 
 .quick-card:nth-child(1) { border-left: 4px solid #1d4ed8; }
 .quick-card:nth-child(2) { border-left: 4px solid #dc2626; }
-.quick-card:nth-child(3) { border-left: 4px solid #2563eb; }
-.quick-card:nth-child(4) { border-left: 4px solid #b91c1c; }
+.quick-card:nth-child(3) { border-left: 4px solid #3b82f6; }
+.quick-card:nth-child(4) { border-left: 4px solid #1e40af; }
 
 .quick-label {
   font-size: 12px;
@@ -996,7 +1007,7 @@ body {
 }
 
 .profil-photo-placeholder {
-  background: linear-gradient(135deg, #1d4ed8 0%, #dc2626 100%);
+  background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%);
   color: white;
   display: flex;
   align-items: center;
@@ -1497,7 +1508,7 @@ body {
 .mobile-menu-toggle {
   display: none;
   background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%);
-  color: white;
+  color: rgb(233, 231, 231);
   border: none;
   padding: 10px 14px;
   border-radius: 8px;
@@ -1769,7 +1780,7 @@ body {
 
   .auth-container {
     flex-direction: column;
-    min-height: auto;
+    min-height: 0;
   }
 
   .auth-form-section h1 {

@@ -1,6 +1,7 @@
 /**
  * Contexte Confirm - Modales de confirmation (remplace window.confirm)
  */
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useCallback } from 'react'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 

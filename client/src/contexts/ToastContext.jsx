@@ -1,9 +1,18 @@
 /**
  * Contexte Toast - Notifications modernes (inspiré Salesforce, HubSpot)
  */
-import { createContext, useContext, useState, useCallback } from 'react'
+/* eslint-disable react-refresh/only-export-components */
+import { createContext, useContext, useState, useCallback, useMemo } from 'react'
 
 const ToastContext = createContext(null)
+
+function createToast(addToast) {
+  const toast = (msg) => addToast(msg, 'info')
+  toast.success = (msg) => addToast(msg, 'success')
+  toast.error = (msg) => addToast(msg, 'error')
+  toast.warning = (msg) => addToast(msg, 'warning')
+  return toast
+}
 
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([])
@@ -16,13 +25,7 @@ export function ToastProvider({ children }) {
     }, 4000)
   }, [])
 
-  const toast = useCallback(
-    (msg) => addToast(msg, 'info'),
-    [addToast]
-  )
-  toast.success = (msg) => addToast(msg, 'success')
-  toast.error = (msg) => addToast(msg, 'error')
-  toast.warning = (msg) => addToast(msg, 'warning')
+  const toast = useMemo(() => createToast(addToast), [addToast])
 
   return (
     <ToastContext.Provider value={{ toasts, addToast, toast }}>
